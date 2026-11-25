@@ -23,7 +23,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
-COPY server/index.js server/game.js server/quizStore.js server/security.js ./server/
+COPY server/*.js ./server/
 COPY server/seed ./server/seed
 COPY --from=build /app/dist ./dist
 RUN mkdir -p /data && chown node:node /data
