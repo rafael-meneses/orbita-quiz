@@ -14,9 +14,13 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-}
     volumes:
       - orbita-data:/data
+    # se tiver nginx, usar esse e remover expose
+    # ports:
+    #   - "127.0.0.1:49152:3000"
     expose:
       - "3000"
 
+  # se usar nginx, remover caddy
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
