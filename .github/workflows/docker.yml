@@ -74,8 +74,9 @@ jobs:
           done
           curl -fs http://localhost:3000/ | grep -q '<div id="root">'
           curl -fsI http://localhost:3000/ | grep -qi 'content-security-policy'
-          npm run test:permissoes -- http://localhost:3000 ci-senha-de-teste
+          # bots primeiro: geram uma partida no histórico, usada pelo teste de isolamento
           npm run test:bots -- 30 http://localhost:3000 ci-senha-de-teste
+          npm run test:permissoes -- http://localhost:3000 ci-senha-de-teste
           docker stop orbita
 
       - name: Logs do container
