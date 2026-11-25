@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, login, lerToken, gravarToken, midia, SessaoExpirada, Icone, CORES, Logo } from './lib.jsx';
+import { api, midia, SessaoExpirada, Icone, CORES, Logo } from './lib.jsx';
+import { useSessao, TelaLogin, TrocarSenha, ROTULO_PAPEL } from './Conta.jsx';
+import Usuarios from './Usuarios.jsx';
 
 // sessão expirada no meio da edição: não descarta o que foi digitado
 const erroTexto = (e) =>
@@ -7,7 +9,7 @@ const erroTexto = (e) =>
     ? 'Sessão expirada. Exporte o JSON, entre novamente em outra aba e importe-o, ou recarregue a página.'
     : e.message || 'Falha na requisição.';
 
-const perguntaNova =(tipo = 'multipla') => ({
+const perguntaNova = (tipo = 'multipla') => ({
   tipo,
   texto: '',
   imagem: '',
@@ -18,56 +20,42 @@ const perguntaNova =(tipo = 'multipla') => ({
 });
 
 export default function Admin() {
-  const [senha, setSenha] = useState('');
-  const [logado, setLogado] = useState(false);
+  const sessao = useSessao();
+  const u = sessao.usuario;
+  const ehAdmin = u?.papel === 'admin';
+  const pendente = !!u?.precisaTrocarSenha;
+  const [aba, setAba] = useState('quizzes'); // quizzes | usuarios | conta
+  const [lista, setLista] = useState(null);
+  const [filtro, setFiltro] = useState('todos'); // administradores: 'todos' | 'meus'
   const [erro, setErro] = useState('');
-  const [lista, setLista] = useState([]);
   const [editando, setEditando] = useState(null); // { id|null, quiz }
 
-  const recarregar = async () => {
-    try {
-      setLista(await api('/api/quizzes'));
-      setLogado(true);
-    } catch (e) {
-      if (e instanceof SessaoExpirada) setLogado(false);
-      else setErro(e.message);
-    }
-  };
+  const tratar = (e) => (e instanceof SessaoExpirada ? sessao.expirou() : setErro(e.message));
 
-  const entrar = async (e) => {
-    e.preventDefault();
-    setErro('');
-    try {
-      await login(senha);
-      setSenha('');
-      await recarregar();
-    } catch (err) {
-      setErro(err.message);
-    }
-  };
-
-  const sair = async () => {
-    await api('/api/logout', { method: 'POST' }).catch(() => {});
-    gravarToken('');
-    setLogado(false);
-  };
+  const recarregar = () =>
+    api('/api/quizzes')
+      .then(setLista)
+      .catch(tratar);
 
   useEffect(() => {
-    if (lerToken()) recarregar();
-  }, []);
+    if (u && !pendente) recarregar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [u?.id, pendente]);
 
-  if (!logado) {
+  if (sessao.carregando) return <div className="app admin"><div className="centro"><h2>Carregando…</h2></div></div>;
+
+  if (!u) {
     return (
       <div className="app admin">
-        <form className="card entrar" onSubmit={entrar}>
-          <div className="logo"><Logo /> Admin</div>
-          <label>
-            Senha
-            <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} autoFocus />
-          </label>
-          {erro && <p className="erro">{erro}</p>}
-          <button className="btn grande" disabled={!senha}>Entrar</button>
-        </form>
+        <TelaLogin titulo="Painel" onEntrar={sessao.entrar} />
+      </div>
+    );
+  }
+
+  if (pendente) {
+    return (
+      <div className="app admin">
+        <TrocarSenha obrigatorio onFeito={sessao.setUsuario} onSair={sessao.sair} />
       </div>
     );
   }
@@ -76,16 +64,37 @@ export default function Admin() {
     return (
       <Editor
         inicial={editando}
-        onVoltar={async () => { setEditando(null); await recarregar(); }}
+        onVoltar={async () => {
+          setEditando(null);
+          await recarregar();
+        }}
       />
     );
   }
 
-  const abrir = async (id) => setEditando({ id, quiz: await api(`/api/quizzes/${id}`) });
+  const abrir = async (id) => {
+    try {
+      setEditando({ id, quiz: await api(`/api/quizzes/${id}`) });
+    } catch (e) {
+      tratar(e);
+    }
+  };
+  const duplicar = async (q) => {
+    try {
+      const quiz = await api(`/api/quizzes/${q.id}`);
+      setEditando({ id: null, quiz: { titulo: `${quiz.titulo} (cópia)`.slice(0, 100), perguntas: quiz.perguntas } });
+    } catch (e) {
+      tratar(e);
+    }
+  };
   const excluir = async (q) => {
     if (!confirm(`Excluir o quiz "${q.titulo}"? Não dá para desfazer.`)) return;
-    await api(`/api/quizzes/${q.id}`, { method: 'DELETE' });
-    recarregar();
+    try {
+      await api(`/api/quizzes/${q.id}`, { method: 'DELETE' });
+      recarregar();
+    } catch (e) {
+      tratar(e);
+    }
   };
   const importar = async (file) => {
     try {
@@ -96,38 +105,72 @@ export default function Admin() {
     }
   };
 
+  const visiveis = (lista || []).filter((q) => !ehAdmin || filtro === 'todos' || q.meu);
+
   return (
     <div className="app admin">
       <div className="admin-wrap">
         <header className="admin-topo">
-          <h1>Quizzes</h1>
+          <div className="logo esq"><Logo /> Órbita</div>
           <div className="acoes esq">
-            <a className="link" href="/host">Ir para o apresentador →</a>
-            <button className="btn sec peq" onClick={sair}>Sair</button>
+            <span className="sub">{u.nome} · {u.usuario}</span>
+            <a className="btn peq" href="/host">Iniciar partida</a>
+            <button className="btn sec peq" onClick={sessao.sair}>Sair</button>
           </div>
         </header>
-        <div className="acoes esq">
-          <button className="btn" onClick={() => setEditando({ id: null, quiz: { titulo: '', perguntas: [perguntaNova()] } })}>+ Novo quiz</button>
-          <label className="btn sec">
-            Importar JSON
-            <input type="file" accept="application/json,.json" hidden onChange={(e) => e.target.files[0] && importar(e.target.files[0])} />
-          </label>
-        </div>
-        <ul className="lista-quiz">
-          {lista.map((q) => (
-            <li key={q.id}>
-              <div>
-                <strong>{q.titulo}</strong>
-                <span className="sub"> · {q.perguntas} perguntas</span>
-              </div>
-              <div className="acoes esq">
-                <button className="btn sec peq" onClick={() => abrir(q.id)}>Editar</button>
-                <button className="btn sec peq" onClick={() => excluir(q)}>Excluir</button>
-              </div>
-            </li>
-          ))}
-          {lista.length === 0 && <li className="sub">Nenhum quiz ainda. Crie o primeiro!</li>}
-        </ul>
+
+        <nav className="abas" role="tablist">
+          <button role="tab" aria-selected={aba === 'quizzes'} className={aba === 'quizzes' ? 'ativa' : ''} onClick={() => setAba('quizzes')}>Meus quizzes</button>
+          {ehAdmin && <button role="tab" aria-selected={aba === 'usuarios'} className={aba === 'usuarios' ? 'ativa' : ''} onClick={() => setAba('usuarios')}>Apresentadores</button>}
+          <button role="tab" aria-selected={aba === 'conta'} className={aba === 'conta' ? 'ativa' : ''} onClick={() => setAba('conta')}>Minha conta</button>
+        </nav>
+
+        {erro && <p className="erro" role="alert">{erro}</p>}
+
+        {aba === 'quizzes' && (
+          <>
+            <div className="acoes esq">
+              <button className="btn" onClick={() => setEditando({ id: null, quiz: { titulo: '', perguntas: [perguntaNova()] } })}>+ Novo quiz</button>
+              <label className="btn sec">
+                Importar JSON
+                <input type="file" accept="application/json,.json" hidden onChange={(e) => e.target.files[0] && importar(e.target.files[0])} />
+              </label>
+              {ehAdmin && (
+                <select className="filtro" value={filtro} onChange={(e) => setFiltro(e.target.value)} aria-label="Filtrar quizzes">
+                  <option value="todos">Todos os quizzes</option>
+                  <option value="meus">Só os meus</option>
+                </select>
+              )}
+            </div>
+            <ul className="lista-quiz">
+              {visiveis.map((q) => (
+                <li key={q.id}>
+                  <div>
+                    <strong>{q.titulo}</strong>
+                    <span className="sub"> · {q.perguntas} perguntas</span>
+                    {ehAdmin && !q.meu && <span className="chip-papel">{q.donoNome || 'sem dono'}</span>}
+                  </div>
+                  <div className="acoes esq">
+                    <button className="btn sec peq" onClick={() => abrir(q.id)}>Editar</button>
+                    <button className="btn sec peq" onClick={() => duplicar(q)}>Duplicar</button>
+                    <button className="btn sec peq" onClick={() => excluir(q)}>Excluir</button>
+                  </div>
+                </li>
+              ))}
+              {lista && visiveis.length === 0 && <li className="sub">Nenhum quiz ainda. Crie o primeiro!</li>}
+              {!lista && <li className="sub">Carregando…</li>}
+            </ul>
+          </>
+        )}
+
+        {aba === 'usuarios' && ehAdmin && <Usuarios euId={u.id} onExpirou={sessao.expirou} />}
+
+        {aba === 'conta' && (
+          <TrocarSenha
+            onFeito={(novo) => sessao.setUsuario(novo)}
+            onCancelar={() => setAba('quizzes')}
+          />
+        )}
       </div>
     </div>
   );
