@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import { createGameManager } from './game.js';
 import * as store from './quizStore.js';
+import * as users from './users.js';
 import { ipCliente, criarLimitador, criarSessoes, cabecalhosSeguranca } from './security.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,6 +22,8 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS || '')
 const SERVIR_FRONT = process.env.SERVE_FRONT !== 'false';
 const DIST = path.join(__dirname, '..', 'dist');
 
+// ADMIN_USER/ADMIN_PASSWORD só criam o primeiro administrador (quando ainda não existe nenhum).
+// Depois disso, as senhas são gerenciadas pelo painel e ficam salvas com hash em DATA_DIR/users.json.
 let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 if (!ADMIN_PASSWORD) {
   if (PRODUCAO) {
@@ -34,6 +37,8 @@ if (!ADMIN_PASSWORD) {
 }
 
 store.initStore();
+const adminInicial = await users.initUsers({ adminUsuario: process.env.ADMIN_USER || 'admin', adminSenha: ADMIN_PASSWORD });
+store.atribuirDonoPadrao(adminInicial.id);
 
 const app = express();
 app.disable('x-powered-by');
@@ -47,20 +52,45 @@ const io = new Server(server, {
 const manager = createGameManager(io);
 
 // ---------- autenticação ----------
-const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
-const senhaOk = (s) => crypto.timingSafeEqual(sha(s), sha(ADMIN_PASSWORD));
 const sessoes = criarSessoes(12 * 3600 * 1000);
-const limiteLogin = criarLimitador({ max: 8, janelaMs: 10 * 60_000, bloqueioMs: 15 * 60_000 });
+const limiteLogin = criarLimitador({ max: 8, janelaMs: 10 * 60_000, bloqueioMs: 15 * 60_000 }); // por IP
+const limiteLoginUsuario = criarLimitador({ max: 12, janelaMs: 15 * 60_000, bloqueioMs: 10 * 60_000 }); // por login (ataque distribuído)
 const limitePin = criarLimitador({ max: 30, janelaMs: 60_000, bloqueioMs: 5 * 60_000 });
 
 const ipReq = (req) => ipCliente(req.socket.remoteAddress, req.get('x-forwarded-for'));
 const ipSocket = (s) => ipCliente(s.handshake.address, s.handshake.headers['x-forwarded-for']);
 const tokenReq = (req) => (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
 
-function exigeAdmin(req, res, next) {
-  if (!sessoes.valido(tokenReq(req))) return res.status(401).json({ erro: 'Sessão expirada. Entre novamente.' });
+/** Usuário logado e ativo a partir do token; null se inválido. Reavalia o cadastro a cada chamada. */
+function usuarioDoToken(token) {
+  const id = sessoes.usuarioDe(token);
+  const u = id && users.porId(id);
+  return u && u.ativo ? u : null;
+}
+
+function autentica(req, res, next) {
+  const u = usuarioDoToken(tokenReq(req));
+  if (!u) return res.status(401).json({ erro: 'Sessão expirada. Entre novamente.' });
+  req.usuario = u;
   next();
 }
+
+// quem ainda está com senha provisória só pode trocá-la
+function senhaEmDia(req, res, next) {
+  if (req.usuario.precisaTrocarSenha) return res.status(403).json({ erro: 'Defina uma nova senha para continuar.', trocarSenha: true });
+  next();
+}
+
+function exigeAdmin(req, res, next) {
+  if (req.usuario.papel !== 'admin') return res.status(403).json({ erro: 'Apenas administradores podem fazer isso.' });
+  next();
+}
+
+const logado = [autentica, senhaEmDia];
+const soAdmin = [autentica, senhaEmDia, exigeAdmin];
+
+const podeAcessarQuiz = (u, quiz) => u.papel === 'admin' || quiz.dono === u.id;
+const MAX_QUIZZES_POR_USUARIO = 100;
 
 // ---------- CORS (front hospedado em outro domínio, ex.: CDN) ----------
 app.use((req, res, next) => {
@@ -91,47 +121,127 @@ app.get('/api/info', (_req, res) => {
   res.json({ publicUrl: PUBLIC_URL, lan });
 });
 
-app.post('/api/login', express.json({ limit: '2kb' }), (req, res) => {
-  const ip = ipReq(req);
-  if (limiteLogin.bloqueado(ip)) return res.status(429).json({ erro: 'Muitas tentativas. Aguarde alguns minutos.' });
-  if (!senhaOk(req.body?.senha || '')) {
-    limiteLogin.falha(ip);
-    return res.status(401).json({ erro: 'Senha incorreta.' });
-  }
-  limiteLogin.sucesso(ip);
-  res.json({ token: sessoes.criar() });
-});
+const handler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+// ---------- sessão e conta ----------
+app.post(
+  '/api/login',
+  express.json({ limit: '2kb' }),
+  handler(async (req, res) => {
+    const ip = ipReq(req);
+    const login = users.normalizaLogin(req.body?.usuario).slice(0, 40);
+    const chaveUsuario = `u:${login}`;
+    if (limiteLogin.bloqueado(ip) || limiteLoginUsuario.bloqueado(chaveUsuario)) {
+      return res.status(429).json({ erro: 'Muitas tentativas. Aguarde alguns minutos.' });
+    }
+    const u = await users.autenticar(login, req.body?.senha);
+    if (!u) {
+      limiteLogin.falha(ip);
+      limiteLoginUsuario.falha(chaveUsuario);
+      return res.status(401).json({ erro: 'Usuário ou senha incorretos.' });
+    }
+    limiteLogin.sucesso(ip);
+    limiteLoginUsuario.sucesso(chaveUsuario);
+    res.json({ token: sessoes.criar(u.id), usuario: users.publico(u) });
+  })
+);
 
 app.post('/api/logout', (req, res) => {
   sessoes.remover(tokenReq(req));
   res.json({ ok: true });
 });
 
-app.get('/api/sessao', exigeAdmin, (_req, res) => res.json({ ok: true }));
+app.get('/api/eu', autentica, (req, res) => res.json(users.publico(req.usuario)));
 
-app.get('/api/quizzes', exigeAdmin, (_req, res) => res.json(store.listQuizzes()));
+app.post(
+  '/api/eu/senha',
+  autentica,
+  express.json({ limit: '2kb' }),
+  handler(async (req, res) => {
+    const chave = `u:${req.usuario.usuario}`;
+    if (limiteLoginUsuario.bloqueado(chave)) return res.status(429).json({ erro: 'Muitas tentativas. Aguarde alguns minutos.' });
+    const r = await users.trocarSenha(req.usuario.id, req.body?.atual, req.body?.nova);
+    if (r.erro) {
+      if (r.erro.includes('atual está incorreta')) limiteLoginUsuario.falha(chave);
+      return res.status(400).json(r);
+    }
+    sessoes.removerDoUsuario(req.usuario.id, tokenReq(req)); // desconecta os outros dispositivos
+    res.json(r.usuario);
+  })
+);
 
-app.get('/api/quizzes/:id', exigeAdmin, (req, res) => {
+// ---------- usuários (somente administradores) ----------
+app.get('/api/usuarios', ...soAdmin, (_req, res) => res.json(users.listar()));
+
+app.post(
+  '/api/usuarios',
+  ...soAdmin,
+  express.json({ limit: '4kb' }),
+  handler(async (req, res) => {
+    const r = await users.criar({ ...req.body, papel: req.body?.papel || 'apresentador' });
+    if (r.erro) return res.status(400).json(r);
+    res.status(201).json(r.usuario);
+  })
+);
+
+app.put(
+  '/api/usuarios/:id',
+  ...soAdmin,
+  express.json({ limit: '4kb' }),
+  handler(async (req, res) => {
+    const { nome, papel, ativo, senha } = req.body || {};
+    const r = await users.atualizar(req.params.id, { nome, papel, ativo, senha }, { quemId: req.usuario.id });
+    if (r.erro) return res.status(r.erro === 'Usuário não encontrado.' ? 404 : 400).json(r);
+    if (r.sessoesInvalidas) sessoes.removerDoUsuario(req.params.id, req.params.id === req.usuario.id ? tokenReq(req) : undefined);
+    res.json(r.usuario);
+  })
+);
+
+app.delete('/api/usuarios/:id', ...soAdmin, (req, res) => {
+  const r = users.remover(req.params.id, { quemId: req.usuario.id });
+  if (r.erro) return res.status(r.erro === 'Usuário não encontrado.' ? 404 : 400).json(r);
+  sessoes.removerDoUsuario(req.params.id);
+  const transferidos = store.transferirQuizzes(req.params.id, req.usuario.id); // não perde os quizzes
+  res.json({ ok: true, quizzesTransferidos: transferidos });
+});
+
+// ---------- quizzes (cada apresentador vê só os seus; administradores veem todos) ----------
+app.get('/api/quizzes', ...logado, (req, res) => {
+  const todos = req.usuario.papel === 'admin';
+  const lista = store.listQuizzes((q) => todos || q.dono === req.usuario.id);
+  res.json(
+    lista.map((q) => ({ ...q, donoNome: users.porId(q.dono)?.nome || null, meu: q.dono === req.usuario.id }))
+  );
+});
+
+app.get('/api/quizzes/:id', ...logado, (req, res) => {
   const q = store.getQuiz(req.params.id);
-  if (!q) return res.status(404).json({ erro: 'Quiz não encontrado.' });
+  // 404 (e não 403) para quizzes de outras pessoas: não revela que existem
+  if (!q || !podeAcessarQuiz(req.usuario, q)) return res.status(404).json({ erro: 'Quiz não encontrado.' });
   res.json(q);
 });
 
-app.post('/api/quizzes', exigeAdmin, express.json({ limit: '1mb' }), (req, res) => {
+app.post('/api/quizzes', ...logado, express.json({ limit: '1mb' }), (req, res) => {
   const { quiz, erro } = store.validarQuiz(req.body);
   if (erro) return res.status(400).json({ erro });
-  res.json(store.saveQuiz(store.novoId(quiz.titulo), quiz));
+  if (store.listQuizzes((q) => q.dono === req.usuario.id).length >= MAX_QUIZZES_POR_USUARIO) {
+    return res.status(400).json({ erro: `Limite de ${MAX_QUIZZES_POR_USUARIO} quizzes por usuário atingido.` });
+  }
+  res.json(store.saveQuiz(store.novoId(quiz.titulo), quiz, req.usuario.id));
 });
 
-app.put('/api/quizzes/:id', exigeAdmin, express.json({ limit: '1mb' }), (req, res) => {
-  if (!store.getQuiz(req.params.id)) return res.status(404).json({ erro: 'Quiz não encontrado.' });
+app.put('/api/quizzes/:id', ...logado, express.json({ limit: '1mb' }), (req, res) => {
+  const atual = store.getQuiz(req.params.id);
+  if (!atual || !podeAcessarQuiz(req.usuario, atual)) return res.status(404).json({ erro: 'Quiz não encontrado.' });
   const { quiz, erro } = store.validarQuiz(req.body);
   if (erro) return res.status(400).json({ erro });
-  res.json(store.saveQuiz(req.params.id, quiz));
+  res.json(store.saveQuiz(req.params.id, quiz, atual.dono)); // o dono nunca muda por edição
 });
 
-app.delete('/api/quizzes/:id', exigeAdmin, (req, res) => {
-  if (!store.deleteQuiz(req.params.id)) return res.status(404).json({ erro: 'Quiz não encontrado.' });
+app.delete('/api/quizzes/:id', ...logado, (req, res) => {
+  const atual = store.getQuiz(req.params.id);
+  if (!atual || !podeAcessarQuiz(req.usuario, atual)) return res.status(404).json({ erro: 'Quiz não encontrado.' });
+  store.deleteQuiz(req.params.id);
   res.json({ ok: true });
 });
 
@@ -144,7 +254,7 @@ const ASSINATURAS = [
 ];
 app.post(
   '/api/upload',
-  exigeAdmin,
+  ...logado,
   express.raw({ type: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], limit: '5mb' }),
   (req, res) => {
     const tipo = Buffer.isBuffer(req.body) && req.body.length > 12 ? ASSINATURAS.find((a) => a.ok(req.body)) : null;
@@ -164,6 +274,15 @@ app.use(
 );
 
 app.use('/api', (_req, res) => res.status(404).json({ erro: 'Rota não encontrada.' }));
+
+// erros da API (JSON inválido, corpo grande demais, falhas inesperadas) sempre em JSON, sem detalhes internos
+// eslint-disable-next-line no-unused-vars
+app.use('/api', (err, _req, res, _next) => {
+  if (err?.type === 'entity.too.large') return res.status(413).json({ erro: 'Conteúdo grande demais.' });
+  if (err?.type === 'entity.parse.failed') return res.status(400).json({ erro: 'JSON inválido.' });
+  console.error('[erro] API:', err);
+  res.status(500).json({ erro: 'Erro interno.' });
+});
 
 // ---------- Front (build de produção) ----------
 if (SERVIR_FRONT && fs.existsSync(DIST)) {
@@ -189,9 +308,11 @@ io.on('connection', (socket) => {
     });
 
   on('host:criar', ({ token, quizId }, reply) => {
-    if (!sessoes.valido(token)) return reply({ erro: 'Sessão expirada. Entre novamente.', sessao: false });
+    const u = usuarioDoToken(token);
+    if (!u) return reply({ erro: 'Sessão expirada. Entre novamente.', sessao: false });
+    if (u.precisaTrocarSenha) return reply({ erro: 'Defina uma nova senha antes de criar partidas.', sessao: false });
     const quiz = store.getQuiz(quizId);
-    if (!quiz) return reply({ erro: 'Quiz não encontrado.' });
+    if (!quiz || !podeAcessarQuiz(u, quiz)) return reply({ erro: 'Quiz não encontrado.' });
     const { pin, hostToken } = manager.criar(quiz);
     manager.hostEntrar(socket, pin, hostToken);
     reply({ pin, hostToken });
