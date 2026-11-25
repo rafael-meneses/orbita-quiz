@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, midia, SessaoExpirada, Icone, CORES, Logo } from './lib.jsx';
 import { useSessao, TelaLogin, TrocarSenha, ROTULO_PAPEL } from './Conta.jsx';
 import Usuarios from './Usuarios.jsx';
+import Historico from './Historico.jsx';
 
 // sessão expirada no meio da edição: não descarta o que foi digitado
 const erroTexto = (e) =>
@@ -122,6 +123,7 @@ export default function Admin() {
         <nav className="abas" role="tablist">
           <button role="tab" aria-selected={aba === 'quizzes'} className={aba === 'quizzes' ? 'ativa' : ''} onClick={() => setAba('quizzes')}>Meus quizzes</button>
           {ehAdmin && <button role="tab" aria-selected={aba === 'usuarios'} className={aba === 'usuarios' ? 'ativa' : ''} onClick={() => setAba('usuarios')}>Apresentadores</button>}
+          <button role="tab" aria-selected={aba === 'historico'} className={aba === 'historico' ? 'ativa' : ''} onClick={() => setAba('historico')}>Histórico</button>
           <button role="tab" aria-selected={aba === 'conta'} className={aba === 'conta' ? 'ativa' : ''} onClick={() => setAba('conta')}>Minha conta</button>
         </nav>
 
@@ -165,6 +167,8 @@ export default function Admin() {
         )}
 
         {aba === 'usuarios' && ehAdmin && <Usuarios euId={u.id} onExpirou={sessao.expirou} />}
+
+        {aba === 'historico' && <Historico ehAdmin={ehAdmin} onExpirou={sessao.expirou} />}
 
         {aba === 'conta' && (
           <TrocarSenha
