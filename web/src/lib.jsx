@@ -65,6 +65,17 @@ export async function login(usuario, senha) {
   return dados;
 }
 
+/** Resolve quando o socket estiver conectado (ou após `ms`, para não travar a tela). */
+export const aguardarConexao = (ms = 5000) =>
+  new Promise((resolve) => {
+    if (socket.connected) return resolve();
+    const t = setTimeout(resolve, ms);
+    socket.once('connect', () => {
+      clearTimeout(t);
+      resolve();
+    });
+  });
+
 export const emit = (evento, dados) =>
   new Promise((resolve) => {
     if (!socket.connected) return resolve({ erro: 'Sem conexão com o servidor.' });

@@ -151,6 +151,7 @@ export default function Admin() {
                     {ehAdmin && !q.meu && <span className="chip-papel">{q.donoNome || 'sem dono'}</span>}
                   </div>
                   <div className="acoes esq">
+                    <a className="btn peq" href={`/host?quiz=${encodeURIComponent(q.id)}`} title="Abre a tela do apresentador já com uma partida deste quiz">▶ Iniciar partida</a>
                     <button className="btn sec peq" onClick={() => abrir(q.id)}>Editar</button>
                     <button className="btn sec peq" onClick={() => duplicar(q)}>Duplicar</button>
                     <button className="btn sec peq" onClick={() => excluir(q)}>Excluir</button>

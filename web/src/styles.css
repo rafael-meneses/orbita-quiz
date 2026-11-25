@@ -222,3 +222,5 @@ body:has(.app.admin) { background: #f3f1fb; }
 
 .card .sub { color: var(--muted); opacity: 1; }
 .card .link { color: #3d4bb8; }
+
+a.btn { text-decoration: none; }
