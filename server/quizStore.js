@@ -22,20 +22,52 @@ export function initStore() {
 const idValido = (id) => typeof id === 'string' && /^[a-z0-9-]{1,60}$/.test(id);
 const fileOf = (id) => path.join(QUIZ_DIR, `${id}.json`);
 
-export function listQuizzes() {
+/** Lista os quizzes; o filtro (opcional) recebe o quiz completo e decide se ele entra na lista. */
+export function listQuizzes(filtro = () => true) {
   return fs
     .readdirSync(QUIZ_DIR)
     .filter((f) => f.endsWith('.json'))
     .map((f) => {
       try {
         const q = JSON.parse(fs.readFileSync(path.join(QUIZ_DIR, f), 'utf8'));
-        return { id: q.id, titulo: q.titulo, perguntas: q.perguntas.length };
+        return filtro(q) ? { id: q.id, titulo: q.titulo, perguntas: q.perguntas.length, dono: q.dono || null } : null;
       } catch {
         return null;
       }
     })
     .filter(Boolean)
-    .sort((a, b) => a.titulo.localeCompare(b.titulo));
+    .sort((a, b) => a.titulo.localeCompare(b.titulo, 'pt-BR'));
+}
+
+/** Quizzes sem dono (criados antes do cadastro de usuários) passam a pertencer ao administrador. */
+export function atribuirDonoPadrao(donoId) {
+  for (const f of fs.readdirSync(QUIZ_DIR).filter((x) => x.endsWith('.json'))) {
+    try {
+      const caminho = path.join(QUIZ_DIR, f);
+      const q = JSON.parse(fs.readFileSync(caminho, 'utf8'));
+      if (!q.dono) fs.writeFileSync(caminho, JSON.stringify({ ...q, dono: donoId }, null, 2));
+    } catch {
+      /* ignora arquivo inválido */
+    }
+  }
+}
+
+/** Passa todos os quizzes de um dono para outro (ao excluir um usuário). */
+export function transferirQuizzes(deId, paraId) {
+  let n = 0;
+  for (const f of fs.readdirSync(QUIZ_DIR).filter((x) => x.endsWith('.json'))) {
+    try {
+      const caminho = path.join(QUIZ_DIR, f);
+      const q = JSON.parse(fs.readFileSync(caminho, 'utf8'));
+      if (q.dono === deId) {
+        fs.writeFileSync(caminho, JSON.stringify({ ...q, dono: paraId }, null, 2));
+        n++;
+      }
+    } catch {
+      /* ignora */
+    }
+  }
+  return n;
 }
 
 export function getQuiz(id) {
@@ -100,8 +132,8 @@ export function validarQuiz(input) {
   return { quiz: { titulo, perguntas } };
 }
 
-export function saveQuiz(id, quizNormalizado) {
-  const quiz = { id, ...quizNormalizado };
+export function saveQuiz(id, quizNormalizado, dono) {
+  const quiz = { id, dono, ...quizNormalizado };
   fs.writeFileSync(fileOf(id), JSON.stringify(quiz, null, 2));
   return quiz;
 }

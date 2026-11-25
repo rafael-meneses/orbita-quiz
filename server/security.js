@@ -38,31 +38,36 @@ export function criarLimitador({ max, janelaMs, bloqueioMs }) {
   };
 }
 
-/** Sessões de administrador: o navegador guarda um token aleatório, nunca a senha. */
+/** Sessões de usuários: o navegador guarda um token aleatório, nunca a senha. */
 export function criarSessoes(ttlMs) {
-  const sessoes = new Map(); // token -> expira
+  const sessoes = new Map(); // token -> { usuarioId, expira }
   setInterval(() => {
     const agora = Date.now();
-    for (const [t, exp] of sessoes) if (exp < agora) sessoes.delete(t);
+    for (const [t, s] of sessoes) if (s.expira < agora) sessoes.delete(t);
   }, 10 * 60_000).unref();
   return {
-    criar() {
+    criar(usuarioId) {
       const token = crypto.randomBytes(32).toString('base64url');
-      sessoes.set(token, Date.now() + ttlMs);
+      sessoes.set(token, { usuarioId, expira: Date.now() + ttlMs });
       return token;
     },
-    valido(token) {
-      if (typeof token !== 'string' || !token) return false;
-      const exp = sessoes.get(token);
-      if (!exp) return false;
-      if (exp < Date.now()) {
+    /** Retorna o id do usuário dono do token, ou null se inválido/expirado. */
+    usuarioDe(token) {
+      if (typeof token !== 'string' || !token) return null;
+      const s = sessoes.get(token);
+      if (!s) return null;
+      if (s.expira < Date.now()) {
         sessoes.delete(token);
-        return false;
+        return null;
       }
-      return true;
+      return s.usuarioId;
     },
     remover(token) {
       sessoes.delete(token);
+    },
+    /** Encerra todas as sessões de um usuário (troca de senha, desativação, exclusão). */
+    removerDoUsuario(usuarioId, manter) {
+      for (const [t, s] of sessoes) if (s.usuarioId === usuarioId && t !== manter) sessoes.delete(t);
     },
   };
 }
