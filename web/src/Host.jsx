@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { useSessao, TelaLogin, TrocarSenha } from './Conta.jsx';
 import {
-  socket, emit, api, lerToken, SessaoExpirada, lerJSON, gravarJSON,
+  socket, emit, aguardarConexao, api, lerToken, SessaoExpirada, lerJSON, gravarJSON,
   useEstado, useConectado, useRestante, Barra, Pergunta, Icone, CORES, Logo, ordinal, fmt,
 } from './lib.jsx';
 
@@ -63,25 +63,36 @@ function Criar({ aviso, onCriada }) {
   const u = sessao.usuario;
   const pendente = !!u?.precisaTrocarSenha;
 
+  const criar = async (id = quizId) => {
+    setErro('');
+    const r = await emit('host:criar', { token: lerToken(), quizId: id });
+    if (r.sessao === false) return sessao.expirou();
+    if (r.erro) return setErro(r.erro);
+    onCriada({ pin: r.pin, hostToken: r.hostToken });
+  };
+
   useEffect(() => {
     if (!u || pendente) return;
     api('/api/quizzes')
-      .then((lista) => {
+      .then(async (lista) => {
         setQuizzes(lista);
+        // atalho do painel: /host?quiz=<id> já cria a partida daquele quiz
+        const pedido = new URLSearchParams(window.location.search).get('quiz');
+        if (pedido) {
+          window.history.replaceState(null, '', window.location.pathname); // recarregar não cria outra partida
+          if (lista.some((q) => q.id === pedido)) {
+            setQuizId(pedido);
+            await aguardarConexao();
+            return criar(pedido);
+          }
+          setErro('O quiz escolhido não foi encontrado. Selecione outro abaixo.');
+        }
         // prefere os quizzes do próprio usuário
         setQuizId((lista.find((q) => q.meu) || lista[0])?.id || '');
       })
       .catch((e) => (e instanceof SessaoExpirada ? sessao.expirou() : setErro(e.message)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [u?.id, pendente]);
-
-  const criar = async () => {
-    setErro('');
-    const r = await emit('host:criar', { token: lerToken(), quizId });
-    if (r.sessao === false) return sessao.expirou();
-    if (r.erro) return setErro(r.erro);
-    onCriada({ pin: r.pin, hostToken: r.hostToken });
-  };
 
   if (sessao.carregando) return <div className="centro"><h2>Carregando…</h2></div>;
   if (!u) return <TelaLogin titulo="Apresentador" aviso={aviso} onEntrar={sessao.entrar} />;
@@ -120,7 +131,7 @@ function Criar({ aviso, onCriada }) {
         </label>
       )}
       {erro && <p className="erro" role="alert">{erro}</p>}
-      <button className="btn grande" onClick={criar} disabled={!quizId}>Criar partida</button>
+      <button className="btn grande" onClick={() => criar()} disabled={!quizId}>Criar partida</button>
       <a className="link" href="/admin">Meus quizzes{u.papel === 'admin' ? ' e apresentadores' : ''} →</a>
       <div className="acoes esq conta-acoes">
         <button type="button" className="btn sec peq" onClick={() => setTrocando(true)}>Trocar senha</button>

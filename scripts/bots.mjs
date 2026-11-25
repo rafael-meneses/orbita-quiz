@@ -123,6 +123,19 @@ if (eu.pontos !== antes) falha('pontos divergentes após reconexão');
 console.log(`OK em ${((Date.now() - t0) / 1000).toFixed(1)}s. Reconexão do Bot1 preservou ${antes} pontos.`);
 novo.close();
 await emit(host, 'host:encerrar');
+
+// histórico: a partida concluída deve estar registrada, com totais e sem respostas individuais
+const auth = { headers: { Authorization: `Bearer ${login.token}` } };
+const { meses } = await fetch(`${URL}/api/historico/meses`, auth).then((r) => r.json());
+const lista = await fetch(`${URL}/api/historico?mes=${meses[0]?.mes}`, auth).then((r) => r.json());
+const resumo = lista.find((p) => p.pin === criado.pin);
+if (!resumo) falha('partida não apareceu no histórico');
+if (resumo.status !== 'concluida' || resumo.jogadores !== N) falha(`resumo do histórico inesperado: ${JSON.stringify(resumo)}`);
+const det = await fetch(`${URL}/api/historico/${resumo.id}`, auth).then((r) => r.json());
+if (det.ranking.length !== N || det.perguntas.length !== estado.total) falha('detalhe do histórico incompleto');
+if (det.ranking[0].pontos !== podio[0].pontos) falha('ranking do histórico diverge do pódio');
+const tamanho = Buffer.byteLength(JSON.stringify(det));
+console.log(`Histórico OK: ${det.perguntas.length} perguntas, ${det.ranking.length} jogadores, ~${(tamanho / 1024).toFixed(1)} KB sem compressão.`);
 bots.forEach((x) => x.s.close());
 host.close();
 console.log('TUDO OK');

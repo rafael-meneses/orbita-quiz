@@ -9,6 +9,7 @@ import { Server } from 'socket.io';
 import { createGameManager } from './game.js';
 import * as store from './quizStore.js';
 import * as users from './users.js';
+import * as historico from './history.js';
 import { ipCliente, criarLimitador, criarSessoes, cabecalhosSeguranca } from './security.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +40,7 @@ if (!ADMIN_PASSWORD) {
 store.initStore();
 const adminInicial = await users.initUsers({ adminUsuario: process.env.ADMIN_USER || 'admin', adminSenha: ADMIN_PASSWORD });
 store.atribuirDonoPadrao(adminInicial.id);
+historico.initHistorico();
 
 const app = express();
 app.disable('x-powered-by');
@@ -49,7 +51,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 16 * 1024,
   cors: CORS_ORIGINS.length ? { origin: CORS_ORIGINS } : undefined,
 });
-const manager = createGameManager(io);
+const manager = createGameManager(io, { aoTerminar: historico.registrar });
 
 // ---------- autenticação ----------
 const sessoes = criarSessoes(12 * 3600 * 1000);
@@ -205,6 +207,27 @@ app.delete('/api/usuarios/:id', ...soAdmin, (req, res) => {
   res.json({ ok: true, quizzesTransferidos: transferidos });
 });
 
+// ---------- histórico de partidas (apresentador vê as que conduziu; administrador vê todas) ----------
+const podeVerPartida = (u, r) => u.papel === 'admin' || r.apresentador?.id === u.id;
+
+app.get('/api/historico/meses', ...logado, (req, res) => {
+  res.json({
+    meses: historico.meses((r) => podeVerPartida(req.usuario, r)),
+    bytes: req.usuario.papel === 'admin' ? historico.tamanho() : undefined,
+  });
+});
+
+app.get('/api/historico', ...logado, (req, res) => {
+  const mes = String(req.query.mes || '');
+  res.json(historico.listarMes(mes, (r) => podeVerPartida(req.usuario, r)));
+});
+
+app.get('/api/historico/:id', ...logado, (req, res) => {
+  const r = historico.obter(req.params.id);
+  if (!r || !podeVerPartida(req.usuario, r)) return res.status(404).json({ erro: 'Partida não encontrada.' });
+  res.json(r);
+});
+
 // ---------- quizzes (cada apresentador vê só os seus; administradores veem todos) ----------
 app.get('/api/quizzes', ...logado, (req, res) => {
   const todos = req.usuario.papel === 'admin';
@@ -313,7 +336,7 @@ io.on('connection', (socket) => {
     if (u.precisaTrocarSenha) return reply({ erro: 'Defina uma nova senha antes de criar partidas.', sessao: false });
     const quiz = store.getQuiz(quizId);
     if (!quiz || !podeAcessarQuiz(u, quiz)) return reply({ erro: 'Quiz não encontrado.' });
-    const { pin, hostToken } = manager.criar(quiz);
+    const { pin, hostToken } = manager.criar(quiz, { id: u.id, nome: u.nome });
     manager.hostEntrar(socket, pin, hostToken);
     reply({ pin, hostToken });
   });
@@ -349,6 +372,7 @@ io.on('connection', (socket) => {
 for (const sinal of ['SIGTERM', 'SIGINT']) {
   process.on(sinal, () => {
     console.log(`${sinal} recebido, encerrando…`);
+    manager.registrarPendentes(); // partidas em andamento entram no histórico como interrompidas
     io.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 5000).unref();

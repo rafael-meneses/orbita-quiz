@@ -19,6 +19,20 @@ As alternativas são identificadas por ícones próprios do tema de exploração
 - Excluir um usuário transfere os quizzes dele para quem o excluiu. Quizzes criados antes do cadastro de usuários passam a ser do primeiro administrador.
 - **Esqueceu a senha do administrador?** Com acesso ao servidor: `docker compose exec orbita node server/reset-senha.js admin` (informe a nova senha como segundo argumento ou em `NOVA_SENHA`) e depois `docker compose restart orbita`.
 
+## Iniciar partida e histórico
+
+- No painel, cada quiz tem **▶ Iniciar partida**: abre o `/host` já com a partida daquele quiz criada (lobby com PIN e QR Code).
+- A aba **Histórico** lista as partidas por mês, com vencedor, número de jogadores e duração. O detalhe mostra o ranking completo, a taxa de acerto e a distribuição das respostas de cada pergunta, e permite baixar o CSV.
+- Apresentadores veem as partidas que conduziram; administradores veem todas (e o espaço ocupado).
+- Uma partida entra no histórico ao chegar ao pódio, ou como **interrompida** se for encerrada, expirar ou o servidor for desligado depois de pelo menos uma pergunta.
+
+**Como o histórico economiza espaço** ([`server/history.js`](server/history.js)):
+
+- Uma linha JSON por partida, num arquivo por mês (`DATA_DIR/historico/AAAA-MM.jsonl`). Gravar é só acrescentar uma linha.
+- Guarda apenas totais: por pergunta, quantas pessoas escolheram cada alternativa; por jogador, posição, apelido, pontos, acertos e tempo médio. A resposta de cada jogador em cada pergunta (que cresce jogadores × perguntas) não é guardada.
+- Meses encerrados são comprimidos com gzip (`AAAA-MM.jsonl.gz`), e meses além de `HISTORY_RETENTION_MONTHS` (padrão 24) são apagados.
+- Referência medida: partida com 50 jogadores e 5 perguntas ≈ 2,3 KB em texto e ≈ 1 KB comprimida.
+
 ## Deploy com Docker (GHCR + VM)
 
 O workflow [`.github/workflows/docker.yml`](.github/workflows/docker.yml) roda a cada push na `main`, em tags `v*` e em PRs:
@@ -66,7 +80,8 @@ NODE_ENV=production ADMIN_PASSWORD=uma-senha-forte PUBLIC_URL=https://orbita.seu
 | `CORS_ORIGINS` | — | Domínios de front hospedados fora do servidor, separados por vírgula. |
 | `SERVE_FRONT` | `true` | `false` para o servidor atender só API e WebSocket. |
 | `PORT` | `3000` | Porta HTTP. |
-| `DATA_DIR` | `server/data` | Usuários (`users.json`, com senhas em hash), quizzes e imagens enviadas. Faça backup. |
+| `HISTORY_RETENTION_MONTHS` | `24` | Meses de histórico mantidos; os mais antigos são apagados. |
+| `DATA_DIR` | `server/data` | Usuários (`users.json`, com senhas em hash), quizzes, imagens enviadas e histórico de partidas. Faça backup. |
 
 Use HTTPS com proxy reverso que encaminhe WebSocket (`Upgrade`) e mantenha **uma única instância**: o estado das partidas fica em memória.
 

@@ -98,6 +98,22 @@ const partida = await emit(hostAna, 'host:criar', { token: tAna, quizId: qAna.co
 confere(!!partida.pin, 'Ana cria partida com o próprio quiz', JSON.stringify(partida));
 hostAna.close();
 
+console.log('Histórico');
+const mesesAdm = (await req('GET', '/api/historico/meses', { token: tAdm })).corpo.meses;
+const mesesAna = (await req('GET', '/api/historico/meses', { token: tAna }));
+confere(mesesAna.status === 200 && mesesAna.corpo.bytes === undefined, 'apresentador acessa o próprio histórico, sem dados de disco');
+if (mesesAdm.length) {
+  const doAdmin = (await req('GET', `/api/historico?mes=${mesesAdm[0].mes}`, { token: tAdm })).corpo.find((x) => x.apresentador?.id !== rAna.corpo.id);
+  if (doAdmin) {
+    confere((await req('GET', `/api/historico/${doAdmin.id}`, { token: tAna })).status === 404, 'Ana não abre partida conduzida por outra pessoa');
+    const daAna = (await req('GET', `/api/historico?mes=${mesesAdm[0].mes}`, { token: tAna })).corpo;
+    confere(daAna.every((x) => x.apresentador?.id === rAna.corpo.id), 'lista da Ana só tem partidas dela');
+  }
+} else {
+  console.log('  (sem partidas no histórico; rode test:bots antes para testar o isolamento)');
+}
+confere((await req('GET', '/api/historico/..%2F..%2Fusers', { token: tAdm })).status === 404, 'id de histórico inválido não acessa arquivos');
+
 console.log('Desativação, redefinição e exclusão');
 const ativo = await req('PUT', `/api/usuarios/${rAna.corpo.id}`, { token: tAdm, json: { ativo: false } });
 confere(ativo.status === 200 && ativo.corpo.ativo === false, 'admin desativa a Ana');
