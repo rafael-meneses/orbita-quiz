@@ -30,7 +30,14 @@ export function pontuar(q, ms, streakAnterior) {
   return base + bonus;
 }
 
-export function createGameManager(io) {
+const corta = (s, n) => (String(s || '').length > n ? `${String(s).slice(0, n - 1)}…` : String(s || ''));
+
+/**
+ * @param io servidor Socket.IO
+ * @param opcoes.aoTerminar chamada uma única vez por partida jogada (ao chegar ao pódio ou ao ser
+ *        encerrada/expirada depois de pelo menos uma pergunta), com o resumo compacto para o histórico.
+ */
+export function createGameManager(io, { aoTerminar } = {}) {
   const games = new Map();
   const hostRoom = (pin) => `host:${pin}`;
 
@@ -164,7 +171,43 @@ export function createGameManager(io) {
     g.dist = dist;
     g.state = 'revelacao';
     g.endsAt = 0;
+    // estatística agregada da pergunta (o histórico não guarda a resposta de cada jogador, só os totais)
+    const acertos = dist[q.correta] || 0;
+    const msAcertos = [...g.answers.values()].filter((a) => a.opcao === q.correta).reduce((s, a) => s + a.ms, 0);
+    g.estatisticas.push({
+      texto: corta(q.texto, 140),
+      opcoes: q.opcoes.map((o) => corta(o, 60)),
+      correta: q.correta,
+      dist,
+      jogadores: g.players.size,
+      msMedioAcertos: acertos ? Math.round(msAcertos / acertos) : null,
+    });
     broadcast(g);
+  }
+
+  /** Monta o registro compacto da partida e entrega a `aoTerminar` (no máximo uma vez). */
+  function registrar(g, status) {
+    if (g.registrada || g.estatisticas.length === 0 || !aoTerminar) return;
+    g.registrada = true;
+    const porId = new Map([...g.players.values()].map((p) => [p.id, p]));
+    try {
+      aoTerminar({
+        status, // 'concluida' | 'interrompida'
+        pin: g.pin,
+        quiz: { id: g.quiz.id, titulo: g.quiz.titulo, perguntas: g.quiz.perguntas.length },
+        apresentador: g.host,
+        inicio: new Date(g.iniciadaEm).toISOString(),
+        fim: new Date().toISOString(),
+        perguntas: g.estatisticas,
+        // linhas compactas: [posição, apelido, pontos, acertos, ms médio dos acertos]
+        ranking: ranking(g).map((r) => {
+          const p = porId.get(r.id);
+          return [r.posicao, r.apelido, r.pontos, p.acertos, p.acertos ? Math.round(p.msAcertos / p.acertos) : null];
+        }),
+      });
+    } catch (e) {
+      console.error('[erro] histórico:', e);
+    }
   }
 
   function todosResponderam(g) {
@@ -174,11 +217,16 @@ export function createGameManager(io) {
 
   // ---------- API usada pelos handlers de socket ----------
 
-  function criar(quiz) {
+  /** @param host { id, nome } de quem criou a partida (vai para o histórico) */
+  function criar(quiz, host = null) {
     const pin = novoPin();
     const g = {
       pin,
       quiz,
+      host,
+      estatisticas: [],
+      registrada: false,
+      iniciadaEm: 0,
       hostToken: rid(),
       state: 'lobby',
       index: -1,
@@ -276,6 +324,7 @@ export function createGameManager(io) {
     switch (g.state) {
       case 'lobby':
         if (g.players.size === 0) return { erro: 'Aguarde pelo menos 1 jogador.' };
+        g.iniciadaEm = Date.now();
         iniciarPergunta(g, 0);
         break;
       case 'respondendo':
@@ -284,6 +333,7 @@ export function createGameManager(io) {
       case 'revelacao':
         if (g.index >= g.quiz.perguntas.length - 1) {
           g.state = 'podio';
+          registrar(g, 'concluida');
           broadcast(g);
         } else {
           g.state = 'ranking';
@@ -320,6 +370,7 @@ export function createGameManager(io) {
     const g = doHost(socket);
     if (!g) return { erro: 'Sem permissão.' };
     limpaTimer(g);
+    registrar(g, 'interrompida'); // só registra se ao menos uma pergunta foi jogada e ainda não houve pódio
     io.to(hostRoom(g.pin)).emit('encerrada');
     for (const p of g.players.values()) if (p.socketId) io.to(p.socketId).emit('encerrada');
     games.delete(g.pin);
@@ -357,10 +408,16 @@ export function createGameManager(io) {
     for (const [pin, g] of games) {
       if (agora - g.lastActivity > GAME_TTL_MS) {
         limpaTimer(g);
+        registrar(g, 'interrompida');
         games.delete(pin);
       }
     }
   }, 10 * 60 * 1000).unref();
 
-  return { criar, hostEntrar, jogadorEntrar, jogadorRetomar, responder, avancar, expulsar, encerrar, csv, desconectar };
+  /** Desligamento do servidor: registra no histórico as partidas que já tinham perguntas jogadas. */
+  function registrarPendentes() {
+    for (const g of games.values()) registrar(g, 'interrompida');
+  }
+
+  return { registrarPendentes, criar, hostEntrar, jogadorEntrar, jogadorRetomar, responder, avancar, expulsar, encerrar, csv, desconectar };
 }
