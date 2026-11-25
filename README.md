@@ -5,10 +5,19 @@ Quiz ao vivo com ranking em tempo real. O apresentador projeta as perguntas no t
 | Rota | Quem usa | Para quê |
 |---|---|---|
 | `/` | Jogadores | Entrar com PIN e apelido (o QR Code do telão já preenche o PIN) |
-| `/host` | Apresentador | Criar a partida, mostrar PIN/QR, conduzir as perguntas, ranking, pódio e CSV |
-| `/admin` | Organizador | Criar e editar quizzes (texto, imagem, V/F, tempo, pontos), importar e exportar JSON |
+| `/host` | Apresentador | Entrar com usuário e senha, criar a partida, mostrar PIN/QR, conduzir as perguntas, ranking, pódio e CSV |
+| `/admin` | Apresentador e administrador | Painel: quizzes (texto, imagem, V/F, tempo, pontos, duplicar, importar/exportar JSON), troca de senha e, para administradores, cadastro de apresentadores |
 
 As alternativas são identificadas por ícones próprios do tema de exploração espacial: **foguete**, **satélite**, **planeta** e **cometa** ([`web/src/icons.jsx`](web/src/icons.jsx)).
+
+## Usuários e permissões
+
+- **Administrador:** gerencia apresentadores (criar, desativar, redefinir senha, trocar papel, excluir) e enxerga e edita os quizzes de todos.
+- **Apresentador:** cria, edita, duplica e conduz **apenas os próprios quizzes**. Os de outras pessoas nem aparecem para ele.
+- O primeiro administrador é criado automaticamente na primeira inicialização, com `ADMIN_USER` (padrão `admin`) e `ADMIN_PASSWORD`. Depois disso essas variáveis **não alteram mais nada**: as senhas passam a ser gerenciadas pelo painel.
+- Ao criar ou redefinir um usuário, o administrador define uma **senha provisória**, que o usuário é obrigado a trocar no primeiro acesso.
+- Excluir um usuário transfere os quizzes dele para quem o excluiu. Quizzes criados antes do cadastro de usuários passam a ser do primeiro administrador.
+- **Esqueceu a senha do administrador?** Com acesso ao servidor: `docker compose exec orbita node server/reset-senha.js admin` (informe a nova senha como segundo argumento ou em `NOVA_SENHA`) e depois `docker compose restart orbita`.
 
 ## Deploy com Docker (GHCR + VM)
 
@@ -51,19 +60,22 @@ NODE_ENV=production ADMIN_PASSWORD=uma-senha-forte PUBLIC_URL=https://orbita.seu
 
 | Variável | Padrão | Uso |
 |---|---|---|
-| `ADMIN_PASSWORD` | — | Senha do `/admin` e do `/host`. **Obrigatória** com `NODE_ENV=production` (o servidor não sobe sem ela). Em desenvolvimento, usa `admin`. |
+| `ADMIN_USER` | `admin` | Login do primeiro administrador (só vale na primeira inicialização). |
+| `ADMIN_PASSWORD` | — | Senha do primeiro administrador (só vale na primeira inicialização). **Obrigatória** com `NODE_ENV=production`. Em desenvolvimento, usa `admin`. |
 | `PUBLIC_URL` | — | Endereço que aparece no telão e no QR. Sem ele, mostra o IP da rede local (editável na tela do lobby). |
 | `CORS_ORIGINS` | — | Domínios de front hospedados fora do servidor, separados por vírgula. |
 | `SERVE_FRONT` | `true` | `false` para o servidor atender só API e WebSocket. |
 | `PORT` | `3000` | Porta HTTP. |
-| `DATA_DIR` | `server/data` | Quizzes e imagens enviadas. Faça backup. |
+| `DATA_DIR` | `server/data` | Usuários (`users.json`, com senhas em hash), quizzes e imagens enviadas. Faça backup. |
 
 Use HTTPS com proxy reverso que encaminhe WebSocket (`Upgrade`) e mantenha **uma única instância**: o estado das partidas fica em memória.
 
 ## Segurança
 
-- O navegador recebe um token de sessão (12 h) no login; a senha nunca fica salva no navegador.
-- Login bloqueado por 15 min após 8 tentativas erradas por IP; PINs errados também são limitados por IP.
+- Senhas salvas com hash (scrypt) e sal por usuário; o navegador guarda só um token de sessão (12 h), nunca a senha.
+- Trocar a senha, desativar ou excluir um usuário encerra as sessões dele na hora.
+- Login limitado por IP (8 erros bloqueiam por 15 min) e por usuário; a resposta de erro não revela se o usuário existe. PINs errados também são limitados por IP.
+- Cada apresentador só acessa os próprios quizzes (os de outros respondem 404); o limite é de 100 quizzes por usuário.
 - Cada conexão controla no máximo um jogador; o apresentador pode remover jogadores no lobby.
 - Uploads aceitam só PNG, JPG, GIF e WEBP, conferidos pela assinatura do arquivo.
 - Cabeçalhos de segurança (CSP, `frame-ancestors 'none'`, `nosniff`, HSTS atrás de HTTPS).
@@ -74,7 +86,8 @@ Use HTTPS com proxy reverso que encaminhe WebSocket (`Upgrade`) e mantenha **uma
 ```bash
 npm run dev:server   # API + Socket.IO em :3000
 npm run dev:web      # Vite em :5173 (proxy para :3000)
-npm run test:bots -- 100 http://localhost:3000 admin   # simula 100 jogadores jogando um quiz
+npm run test:bots -- 100 http://localhost:3000 admin   # simula 100 jogadores jogando um quiz (senha do admin)
+npm run test:permissoes -- http://localhost:3000 admin  # testa usuários, papéis e donos de quiz
 ```
 
 ## Regras de jogo

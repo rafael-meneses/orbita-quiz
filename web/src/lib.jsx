@@ -50,14 +50,19 @@ export async function api(caminho, opts = {}) {
     gravarToken('');
     throw new SessaoExpirada(corpo.erro || 'Sessão expirada.');
   }
-  if (!r.ok) throw new Error(corpo.erro || 'Falha na requisição.');
+  if (!r.ok) {
+    const erro = new Error(corpo.erro || 'Falha na requisição.');
+    erro.trocarSenha = !!corpo.trocarSenha; // senha provisória: o usuário precisa defini-la antes de continuar
+    throw erro;
+  }
   return corpo;
 }
 
-export async function login(senha) {
-  const { token } = await api('/api/login', { method: 'POST', json: { senha } });
+/** Entra com usuário e senha; guarda só o token e devolve os dados do usuário. */
+export async function login(usuario, senha) {
+  const { token, usuario: dados } = await api('/api/login', { method: 'POST', json: { usuario, senha } });
   gravarToken(token);
-  return token;
+  return dados;
 }
 
 export const emit = (evento, dados) =>

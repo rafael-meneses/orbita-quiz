@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
+import { useSessao, TelaLogin, TrocarSenha } from './Conta.jsx';
 import {
-  socket, emit, api, login, lerToken, gravarToken, SessaoExpirada, lerJSON, gravarJSON,
+  socket, emit, api, lerToken, SessaoExpirada, lerJSON, gravarJSON,
   useEstado, useConectado, useRestante, Barra, Pergunta, Icone, CORES, Logo, ordinal, fmt,
 } from './lib.jsx';
 
@@ -53,80 +54,78 @@ export default function Host() {
 }
 
 function Criar({ aviso, onCriada }) {
-  const [senha, setSenha] = useState('');
+  const sessao = useSessao();
   const [quizzes, setQuizzes] = useState(null);
   const [quizId, setQuizId] = useState('');
   const [erro, setErro] = useState('');
-  const [logado, setLogado] = useState(false);
+  const [trocando, setTrocando] = useState(false);
 
-  const carregar = async () => {
-    try {
-      const lista = await api('/api/quizzes');
-      setQuizzes(lista);
-      setQuizId(lista[0]?.id || '');
-      setLogado(true);
-    } catch (e) {
-      setLogado(false);
-      if (!(e instanceof SessaoExpirada)) setErro(e.message);
-    }
-  };
+  const u = sessao.usuario;
+  const pendente = !!u?.precisaTrocarSenha;
 
   useEffect(() => {
-    if (lerToken()) carregar();
-  }, []);
-
-  const entrar = async (e) => {
-    e.preventDefault();
-    setErro('');
-    try {
-      await login(senha);
-      setSenha('');
-      await carregar();
-    } catch (err) {
-      setErro(err.message);
-    }
-  };
+    if (!u || pendente) return;
+    api('/api/quizzes')
+      .then((lista) => {
+        setQuizzes(lista);
+        // prefere os quizzes do próprio usuário
+        setQuizId((lista.find((q) => q.meu) || lista[0])?.id || '');
+      })
+      .catch((e) => (e instanceof SessaoExpirada ? sessao.expirou() : setErro(e.message)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [u?.id, pendente]);
 
   const criar = async () => {
     setErro('');
     const r = await emit('host:criar', { token: lerToken(), quizId });
-    if (r.sessao === false) {
-      gravarToken('');
-      setLogado(false);
-    }
+    if (r.sessao === false) return sessao.expirou();
     if (r.erro) return setErro(r.erro);
     onCriada({ pin: r.pin, hostToken: r.hostToken });
   };
 
+  if (sessao.carregando) return <div className="centro"><h2>Carregando…</h2></div>;
+  if (!u) return <TelaLogin titulo="Apresentador" aviso={aviso} onEntrar={sessao.entrar} />;
+  if (pendente || trocando) {
+    return (
+      <TrocarSenha
+        obrigatorio={pendente}
+        onFeito={(novo) => { sessao.setUsuario(novo); setTrocando(false); }}
+        onCancelar={() => setTrocando(false)}
+        onSair={sessao.sair}
+      />
+    );
+  }
+
   return (
     <div className="card entrar">
       <div className="logo"><Logo /> Apresentador</div>
+      <p className="sub conta-linha">
+        Olá, <strong>{u.nome}</strong>
+      </p>
       {aviso && <p className="aviso">{aviso}</p>}
-      {!logado ? (
-        <form onSubmit={entrar}>
-          <label>
-            Senha do apresentador
-            <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} autoFocus />
-          </label>
-          {erro && <p className="erro">{erro}</p>}
-          <button className="btn grande" disabled={!senha}>Continuar</button>
-        </form>
+      {quizzes === null ? (
+        <p className="sub">Carregando quizzes…</p>
+      ) : quizzes.length === 0 ? (
+        <p className="aviso">Você ainda não tem quizzes. Crie o primeiro em “Meus quizzes”.</p>
       ) : (
-        <>
-          <label>
-            Escolha o quiz
-            <select value={quizId} onChange={(e) => setQuizId(e.target.value)}>
-              {quizzes.map((q) => (
-                <option key={q.id} value={q.id}>{q.titulo} ({q.perguntas} perguntas)</option>
-              ))}
-            </select>
-          </label>
-          {quizzes.length === 0 && <p className="aviso">Nenhum quiz cadastrado. Crie um em /admin.</p>}
-          {erro && <p className="erro">{erro}</p>}
-          <button className="btn grande" onClick={criar} disabled={!quizId}>Criar partida</button>
-          <a className="link" href="/admin">Gerenciar quizzes →</a>
-        </>
+        <label>
+          Escolha o quiz
+          <select value={quizId} onChange={(e) => setQuizId(e.target.value)}>
+            {quizzes.map((q) => (
+              <option key={q.id} value={q.id}>
+                {q.titulo} ({q.perguntas} perguntas){u.papel === 'admin' && !q.meu && q.donoNome ? ` — ${q.donoNome}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
+      {erro && <p className="erro" role="alert">{erro}</p>}
+      <button className="btn grande" onClick={criar} disabled={!quizId}>Criar partida</button>
+      <a className="link" href="/admin">Meus quizzes{u.papel === 'admin' ? ' e apresentadores' : ''} →</a>
+      <div className="acoes esq conta-acoes">
+        <button type="button" className="btn sec peq" onClick={() => setTrocando(true)}>Trocar senha</button>
+        <button type="button" className="btn sec peq" onClick={sessao.sair}>Sair</button>
+      </div>
     </div>
   );
 }
