@@ -1,10 +1,11 @@
 // Teste de carga/fumaça: simula 1 host + N jogadores jogando um quiz inteiro.
-// Uso: node scripts/bots.mjs [N=50] [URL=http://localhost:3000] [SENHA=admin]
+// Uso: node scripts/bots.mjs [N=50] [URL=http://localhost:3000] [SENHA=admin] [USUARIO=admin]
 import { io } from 'socket.io-client';
 
 const N = Number(process.argv[2]) || 50;
 const URL = process.argv[3] || 'http://localhost:3000';
 const SENHA = process.argv[4] || process.env.ADMIN_PASSWORD || 'admin';
+const USUARIO = process.argv[5] || process.env.ADMIN_USER || 'admin';
 
 const emit = (s, ev, data) => new Promise((res) => s.emit(ev, data, res));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -16,7 +17,7 @@ const falha = (msg) => {
 const login = await fetch(`${URL}/api/login`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ senha: SENHA }),
+  body: JSON.stringify({ usuario: USUARIO, senha: SENHA }),
 }).then((r) => r.json());
 if (!login.token) falha(`login: ${JSON.stringify(login)}`);
 const quizzes = await fetch(`${URL}/api/quizzes`, { headers: { Authorization: `Bearer ${login.token}` } }).then((r) => r.json());
