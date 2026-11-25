@@ -5,6 +5,8 @@ services:
     image: ${ORBITA_IMAGE:?defina ORBITA_IMAGE no .env}
     restart: unless-stopped
     environment:
+      # só criam o primeiro administrador; depois as senhas são gerenciadas pelo painel
+      ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?defina ADMIN_PASSWORD no .env}
       # endereço do front (QR Code e link do telão); se o front estiver numa CDN, aponte para ela
       PUBLIC_URL: ${PUBLIC_URL:-https://${DOMAIN}}
