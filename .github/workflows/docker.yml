@@ -1,0 +1,130 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+# Actions fixadas por SHA do commit (tag correspondente no comentário).
+# Para atualizar: git ls-remote https://github.com/<dono>/<action> 'refs/tags/<tag>^{}'
+jobs:
+  imagem:
+    name: Imagem Docker (GHCR)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # usado pelo teste de fumaça (scripts/bots.mjs); o build do app acontece no Dockerfile
+      - name: Instalar dependências
+        run: npm ci
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Metadados da imagem
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=pr
+
+      # imagem local (amd64) só para o teste de fumaça
+      - name: Build para teste
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          load: true
+          tags: orbita:teste
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Teste de fumaça (container + 30 jogadores simulados)
+        run: |
+          docker run -d --name orbita -p 3000:3000 -e ADMIN_PASSWORD=ci-senha-de-teste orbita:teste
+          for i in $(seq 1 30); do
+            curl -fs http://localhost:3000/api/info > /dev/null && break
+            sleep 1
+          done
+          curl -fs http://localhost:3000/ | grep -q '<div id="root">'
+          curl -fsI http://localhost:3000/ | grep -qi 'content-security-policy'
+          npm run test:bots -- 30 http://localhost:3000 ci-senha-de-teste
+          docker stop orbita
+
+      - name: Logs do container
+        if: failure()
+        run: docker logs orbita || true
+
+      - name: Login no GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build e push (amd64 + arm64)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  front:
+    name: Front estático (para CDN)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Defina a variável do repositório VITE_API_URL (Settings → Secrets and variables → Actions → Variables)
+      # com o endereço do servidor, ex.: https://api.seudominio.com. Vazio = front e API no mesmo domínio.
+      - name: Compilar front
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: front-dist
+          path: dist/
+          retention-days: 30

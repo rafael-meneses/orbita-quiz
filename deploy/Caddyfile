@@ -1,0 +1,5 @@
+{$DOMAIN} {
+	encode gzip zstd
+	# Caddy encaminha WebSocket automaticamente
+	reverse_proxy orbita:3000
+}

@@ -1,0 +1,37 @@
+# Deploy na VM: app + Caddy (HTTPS automático via Let's Encrypt).
+# Uso: copie esta pasta para a VM, crie o .env a partir do .env.example e rode `docker compose up -d`.
+services:
+  orbita:
+    image: ${ORBITA_IMAGE:?defina ORBITA_IMAGE no .env}
+    restart: unless-stopped
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?defina ADMIN_PASSWORD no .env}
+      # endereço do front (QR Code e link do telão); se o front estiver numa CDN, aponte para ela
+      PUBLIC_URL: ${PUBLIC_URL:-https://${DOMAIN}}
+      # domínios de front hospedados fora deste servidor (CDN), separados por vírgula
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    volumes:
+      - orbita-data:/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - orbita
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?defina DOMAIN no .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  orbita-data:
+  caddy-data:
+  caddy-config:

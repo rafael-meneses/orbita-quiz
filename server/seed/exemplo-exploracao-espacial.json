@@ -1,0 +1,51 @@
+{
+  "id": "exemplo-exploracao-espacial",
+  "titulo": "Exploração espacial (exemplo)",
+  "perguntas": [
+    {
+      "tipo": "multipla",
+      "texto": "Qual é o planeta mais próximo do Sol?",
+      "imagem": "",
+      "opcoes": ["Vênus", "Mercúrio", "Marte", "Terra"],
+      "correta": 1,
+      "tempo": 15,
+      "pontos": 1000
+    },
+    {
+      "tipo": "vf",
+      "texto": "Júpiter é o maior planeta do Sistema Solar.",
+      "imagem": "",
+      "opcoes": ["Verdadeiro", "Falso"],
+      "correta": 0,
+      "tempo": 15,
+      "pontos": 1000
+    },
+    {
+      "tipo": "multipla",
+      "texto": "Em que ano o ser humano pisou na Lua pela primeira vez?",
+      "imagem": "",
+      "opcoes": ["1957", "1961", "1969", "1975"],
+      "correta": 2,
+      "tempo": 20,
+      "pontos": 1000
+    },
+    {
+      "tipo": "multipla",
+      "texto": "Qual foi o primeiro satélite artificial lançado ao espaço?",
+      "imagem": "",
+      "opcoes": ["Explorer 1", "Sputnik 1", "Vanguard 1", "Telstar"],
+      "correta": 1,
+      "tempo": 20,
+      "pontos": 1000
+    },
+    {
+      "tipo": "vf",
+      "texto": "A luz do Sol leva cerca de 8 minutos para chegar à Terra.",
+      "imagem": "",
+      "opcoes": ["Verdadeiro", "Falso"],
+      "correta": 0,
+      "tempo": 15,
+      "pontos": 1000
+    }
+  ]
+}
